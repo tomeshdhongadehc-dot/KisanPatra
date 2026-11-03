@@ -1,0 +1,550 @@
+// Farmer Digital Ecosystem - Release 1 schema (draft v0.1)
+// PostgreSQL + Prisma 6. See docs/TECHNICAL_ARCHITECTURE.md section 5.
+// Conventions:
+//  - Every business table carries orgId (tenant-ready, single org in R1).
+//  - *Enc columns hold AES-256-GCM envelope-encrypted values (app-level); *Idx columns are HMAC blind indexes for exact-match search.
+//  - Never store Aadhaar, bank, PAN. Fields for them intentionally do not exist.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  OPERATOR
+  VERIFIER
+  VIEWER
+  AUDITOR
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  INVITED
+}
+
+enum TrustLevel {
+  L0_DRAFT
+  L1_SUBMITTED
+  L2_DOCUMENT_REVIEWED
+  L3_OFFICIALLY_VERIFIED
+  L4_REVERIFICATION_REQUIRED
+}
+
+enum FarmerStatus {
+  ACTIVE
+  ARCHIVED
+  REVOKED
+}
+
+enum FarmerType {
+  OWNER
+  TENANT
+  SHARECROPPER
+  FAMILY_CULTIVATOR
+  LANDLESS_LABOUR_OR_ALLIED
+  OTHER
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum LandRelationship {
+  OWNER
+  TENANT
+  SHARECROPPER
+  FAMILY
+  OTHER
+}
+
+enum DocumentStatus {
+  UPLOADED
+  QUARANTINED
+  VALIDATED
+  REJECTED
+  PROCESSING
+  READY_FOR_REVIEW
+  FAILED
+  APPROVED
+}
+
+enum DocumentKind {
+  FARMER_REGISTRATION_FORM
+  UNKNOWN_LAYOUT
+  OTHER
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RETRYING
+}
+
+enum FieldReviewState {
+  PROPOSED        // from extractor, unreviewed
+  CONFIRMED       // reviewer confirmed as-is
+  EDITED          // reviewer changed value
+  REJECTED        // reviewer discarded
+}
+
+enum CardStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+  REVOKED
+  EXPIRED
+}
+
+enum TokenStatus {
+  ACTIVE
+  REVOKED
+  SUPERSEDED
+}
+
+enum VerifyOutcome {
+  ACTIVE
+  REVOKED
+  EXPIRED
+  SUPERSEDED
+  NOT_FOUND
+  RATE_LIMITED
+}
+
+enum AuditOutcome {
+  SUCCESS
+  DENIED
+  FAILURE
+}
+
+// ---------- Tenancy & access ----------
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+
+  users     User[]
+  farmers   Farmer[]
+  documents SourceDocument[]
+  settings  OrgSetting[]
+  retention RetentionPolicy[]
+}
+
+model User {
+  id            String     @id @default(uuid()) @db.Uuid
+  orgId         String     @db.Uuid
+  email         String?
+  mobile        String?
+  passwordHash  String // argon2id
+  displayName   String
+  role          Role
+  status        UserStatus @default(ACTIVE)
+  mfaSecretEnc  String?
+  mfaEnabled    Boolean    @default(false)
+  mfaLastStep   Int? // last accepted TOTP time-step: a code cannot be replayed
+  mfaRecoveryHashes String[] @default([]) // sha256 of one-time recovery codes
+  mustChangePassword Boolean @default(false) // temp/reset password: restricted session until changed
+  failedLogins  Int        @default(0)
+  lockedUntil   DateTime?
+  locale        String     @default("mr") // mr | hi | en
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  org      Organization @relation(fields: [orgId], references: [id])
+  sessions Session[]
+
+  @@unique([orgId, email])
+  @@unique([orgId, mobile])
+  @@index([orgId, role])
+}
+
+model Session {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  tokenHash  String   @unique // SHA-256 of opaque cookie value
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  userAgent  String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// ---------- Farmer core (separate entities) ----------
+model Farmer {
+  id             String       @id @default(uuid()) @db.Uuid
+  orgId          String       @db.Uuid
+  platformId     String       @unique // e.g. FRM-7K2Q9XPA ; random, non-sequential
+  farmerType     FarmerType?
+  occupation     String?
+  trustLevel     TrustLevel   @default(L0_DRAFT)
+  status         FarmerStatus @default(ACTIVE)
+  createdById    String       @db.Uuid
+  submittedById  String?      @db.Uuid
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  archivedAt     DateTime?
+
+  org           Organization       @relation(fields: [orgId], references: [id])
+  identity      FarmerIdentity?
+  contact       FarmerContact?
+  addresses     FarmerAddress[]
+  linkedIds     LinkedExternalId[]
+  rights        CultivationRight[]
+  documents     SourceDocument[]
+  cards         Card[]
+  approvals     ApprovalEvent[]
+
+  @@index([orgId, trustLevel])
+  @@index([orgId, createdById])
+}
+
+model FarmerIdentity {
+  farmerId     String    @id @db.Uuid
+  nameEn       String
+  nameLocal    String? // Devanagari etc., exact transcription
+  nameLocalLang String?  @default("mr")
+  gender       Gender?
+  dobEnc       String? // encrypted date
+  casteCategory String?
+  identifierNameEn    String? // father/husband per source form
+  identifierNameLocal String?
+  // search helpers
+  nameEnNorm   String // lowercased, whitespace-normalised
+  nameLocalNorm String?
+
+  farmer Farmer @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+
+  @@index([nameEnNorm])
+  @@index([nameLocalNorm])
+}
+
+model FarmerContact {
+  farmerId   String  @id @db.Uuid
+  mobileEnc  String?
+  mobileIdx  String? // HMAC blind index for lookup/duplicate detection
+  emailEnc   String?
+
+  farmer Farmer @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+
+  @@index([mobileIdx])
+}
+
+model FarmerAddress {
+  id            String  @id @default(uuid()) @db.Uuid
+  farmerId      String  @db.Uuid
+  isPrimary     Boolean @default(true)
+  addressEnEnc  String?
+  addressLocalEnc String?
+  village       String?
+  subDistrict   String? // taluka
+  district      String?
+  state         String?
+  pincode       String?
+
+  farmer Farmer @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+
+  @@index([farmerId])
+  @@index([state, district, village])
+}
+
+// Official / source IDs are linked, never confused with platform ID.
+model LinkedExternalId {
+  id            String    @id @default(uuid()) @db.Uuid
+  farmerId      String    @db.Uuid
+  scheme        String // "AGRISTACK_FARMER_ID" | "AGRISTACK_ENROLLMENT_NO" | ...
+  valueEnc      String
+  valueIdx      String // HMAC blind index (duplicate detection)
+  verified      Boolean   @default(false) // true only via authorized official source (L3)
+  verifiedAt    DateTime?
+  verifiedSource String?
+  sourceDocumentId String? @db.Uuid
+  createdAt     DateTime  @default(now())
+
+  farmer Farmer @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+
+  @@unique([scheme, valueIdx])
+  @@index([farmerId])
+}
+
+// ---------- Land (independent of farmer) ----------
+model LandParcel {
+  id               String   @id @default(uuid()) @db.Uuid
+  orgId            String   @db.Uuid
+  state            String
+  district         String
+  subDistrict      String?
+  village          String
+  surveyValue      String // normalized survey/gat identifier
+  surveyLabel      String // original label: "Gat No." | "S No." | "Survey No."
+  subSurveyValue   String?
+  areaTotalHa      Decimal? @db.Decimal(12, 6)
+  createdAt        DateTime @default(now())
+
+  rights CultivationRight[]
+
+  @@unique([orgId, state, district, village, surveyValue, subSurveyValue])
+  @@index([orgId, state, district, village])
+}
+
+// Link between a farmer and a parcel: ownership != cultivation.
+model CultivationRight {
+  id               String           @id @default(uuid()) @db.Uuid
+  farmerId         String           @db.Uuid
+  parcelId         String           @db.Uuid
+  relationship     LandRelationship
+  ownerNameOnRecord String? // as printed on the land record (may differ from farmer name)
+  ownerType        String? // Single / Joint ... as in source
+  shareType        String?
+  areaOwnedHa      Decimal?         @db.Decimal(12, 6)
+  areaLeasedHa     Decimal?         @db.Decimal(12, 6)
+  areaCultivatedHa Decimal?         @db.Decimal(12, 6)
+  areaAssignedHa   Decimal?         @db.Decimal(12, 6) // "assigned area" from AgriStack form
+  verificationNote String? // provenance label, e.g. "from uploaded form, L2"
+  sourceDocumentId String?          @db.Uuid
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  farmer Farmer     @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+  parcel LandParcel @relation(fields: [parcelId], references: [id])
+
+  @@unique([farmerId, parcelId])
+  @@index([parcelId])
+}
+
+// ---------- Documents & extraction ----------
+model SourceDocument {
+  id            String         @id @default(uuid()) @db.Uuid
+  orgId         String         @db.Uuid
+  farmerId      String?        @db.Uuid
+  uploadedById  String         @db.Uuid
+  kind          DocumentKind   @default(UNKNOWN_LAYOUT)
+  templateId    String? // e.g. "agristack-farmer-reg-form@1"
+  status        DocumentStatus @default(UPLOADED)
+  rejectReason  String?
+  storageKey    String         @unique // random, unguessable
+  sha256        String
+  sizeBytes     Int
+  pageCount     Int?
+  mime          String         @default("application/pdf")
+  containsSensitive Boolean    @default(false) // set if Aadhaar/bank/PAN detected
+  retentionCategory String     @default("ORIGINAL_PDF")
+  deleteAfter   DateTime?
+  deletedAt     DateTime?
+  createdAt     DateTime       @default(now())
+
+  org     Organization    @relation(fields: [orgId], references: [id])
+  farmer  Farmer?         @relation(fields: [farmerId], references: [id])
+  pages   DocumentPage[]
+  jobs    ExtractionJob[]
+
+  @@index([orgId, sha256])
+  @@index([orgId, status])
+  @@index([farmerId])
+  @@index([deleteAfter])
+}
+
+model DocumentPage {
+  id          String @id @default(uuid()) @db.Uuid
+  documentId  String @db.Uuid
+  pageNo      Int
+  imageKey    String @unique // rendered page image in private storage
+  width       Int
+  height      Int
+  skipped     Boolean @default(false) // e.g. consent pages not processed/sent anywhere
+
+  document SourceDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, pageNo])
+}
+
+model ExtractionJob {
+  id            String    @id @default(uuid()) @db.Uuid
+  documentId    String    @db.Uuid
+  status        JobStatus @default(QUEUED)
+  provider      String // "local-ocr" | "gemini" | "vertex"
+  extractorVersion String
+  attempts      Int       @default(0)
+  error         String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  document SourceDocument  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  fields   ExtractedField[]
+
+  @@index([documentId])
+  @@index([status])
+}
+
+model ExtractedField {
+  id            String           @id @default(uuid()) @db.Uuid
+  jobId         String           @db.Uuid
+  fieldKey      String // e.g. "name_en", "land[0].village"
+  rawValueEnc   String? // OCR output
+  normValueEnc  String? // after post-processing
+  finalValueEnc String? // reviewer-approved value
+  confidence    Float?
+  sourcePage    Int?
+  regionJson    Json? // {x,y,w,h} evidence box
+  validationErrors Json?
+  reviewState   FieldReviewState @default(PROPOSED)
+  reviewedById  String?          @db.Uuid
+  reviewedAt    DateTime?
+
+  job       ExtractionJob   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  revisions FieldRevision[]
+
+  @@unique([jobId, fieldKey])
+}
+
+model FieldRevision {
+  id          String   @id @default(uuid()) @db.Uuid
+  fieldId     String   @db.Uuid
+  userId      String   @db.Uuid
+  oldValueEnc String?
+  newValueEnc String?
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  field ExtractedField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@index([fieldId])
+}
+
+// ---------- Trust workflow ----------
+model ApprovalEvent {
+  id         String     @id @default(uuid()) @db.Uuid
+  farmerId   String     @db.Uuid
+  fromLevel  TrustLevel
+  toLevel    TrustLevel
+  actorId    String     @db.Uuid
+  checklist  Json?
+  reason     String?
+  createdAt  DateTime   @default(now())
+
+  farmer Farmer @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+
+  @@index([farmerId, createdAt])
+}
+
+// ---------- Cards & QR verification ----------
+model Card {
+  id            String     @id @default(uuid()) @db.Uuid
+  farmerId      String     @db.Uuid
+  version       Int
+  status        CardStatus @default(DRAFT)
+  trustLevelAtIssue TrustLevel
+  templateVersion String
+  snapshotJson  Json // non-sensitive render inputs used (for reproducibility)
+  pngKey        String?
+  pvcPdfKey     String?
+  a4PdfKey      String?
+  issuedAt      DateTime?
+  expiresAt     DateTime?
+  issuedById    String?    @db.Uuid
+  revokedAt     DateTime?
+  revokeReason  String?
+  createdAt     DateTime   @default(now())
+
+  farmer Farmer              @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+  tokens VerificationToken[]
+
+  @@unique([farmerId, version])
+  @@index([status])
+}
+
+model VerificationToken {
+  id         String      @id @default(uuid()) @db.Uuid
+  cardId     String      @db.Uuid
+  tokenHash  String      @unique // SHA-256 of 256-bit random token; plaintext only in QR
+  status     TokenStatus @default(ACTIVE)
+  createdAt  DateTime    @default(now())
+  revokedAt  DateTime?
+
+  card   Card              @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  events VerificationEvent[]
+
+  @@index([cardId])
+}
+
+model VerificationEvent {
+  id         String        @id @default(uuid()) @db.Uuid
+  tokenId    String?       @db.Uuid // null when token not found
+  outcome    VerifyOutcome
+  createdAt  DateTime      @default(now())
+  // no IP/UA stored beyond short-lived rate-limit counters (kept in cache, not DB)
+
+  token VerificationToken? @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+
+  @@index([tokenId, createdAt])
+  @@index([createdAt])
+}
+
+// ---------- Audit, settings, retention ----------
+model AuditEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  orgId         String       @db.Uuid
+  actorId       String?      @db.Uuid
+  action        String // e.g. "document.upload", "farmer.approve", "card.download"
+  entityType    String
+  entityId      String?
+  outcome       AuditOutcome
+  correlationId String
+  meta          Json? // ids and field *keys* only; never values/PII/tokens
+  createdAt     DateTime     @default(now())
+
+  @@index([orgId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@index([correlationId])
+}
+
+model OrgSetting {
+  orgId   String @db.Uuid
+  key     String // e.g. "public_verify.show_name", "extraction.min_confidence"
+  value   Json
+  updatedAt DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@id([orgId, key])
+}
+
+model RetentionPolicy {
+  id          String @id @default(uuid()) @db.Uuid
+  orgId       String @db.Uuid
+  category    String // ORIGINAL_PDF | REJECTED_UPLOAD | SUPERSEDED_DOC | ...
+  retainDays  Int? // null = retain until manual action
+  action      String @default("DELETE") // DELETE | ARCHIVE
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([orgId, category])
+}

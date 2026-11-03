@@ -1,0 +1,41 @@
+{
+  "id": "agristack-farmer-reg-form@1",
+  "reference": { "width": 1286, "height": 909 },
+  "skipPages": [3, 4],
+  "page1": {
+    "enrollment_number": { "box": [70, 143, 340, 24],  "lang": "eng", "psm": 7, "kind": "enrollment", "whitelist": "0123456789_" },
+    "farmer_id":         { "box": [70, 196, 220, 22],  "lang": "eng", "psm": 7, "kind": "farmer_id", "whitelist": "0123456789" },
+    "name_en":           { "box": [360, 282, 332, 26], "lang": "eng", "psm": 7, "kind": "text" },
+    "name_local":        { "box": [940, 280, 272, 30], "lang": "mar+hin", "psm": 7, "kind": "text" },
+    "gender":            { "box": [138, 312, 165, 26], "lang": "eng", "psm": 7, "kind": "gender" },
+    "caste_category":    { "box": [425, 312, 265, 26], "lang": "eng", "psm": 7, "kind": "text" },
+    "dob":               { "box": [795, 312, 280, 26], "lang": "eng", "psm": 7, "kind": "date", "whitelist": "0123456789/-." },
+    "age":               { "box": [1113, 312, 98, 26], "lang": "eng", "psm": 7, "kind": "age", "whitelist": "0123456789" },
+    "identifier_name_en":    { "box": [268, 342, 422, 26], "lang": "eng", "psm": 7, "kind": "text" },
+    "identifier_name_local": { "box": [944, 340, 268, 30], "lang": "mar+hin", "psm": 7, "kind": "text" },
+    "mobile":            { "box": [195, 423, 358, 26], "lang": "eng", "psm": 7, "kind": "mobile", "whitelist": "0123456789+ " },
+    "email":             { "box": [666, 423, 545, 26], "lang": "eng", "psm": 7, "kind": "email" },
+    "address_en":        { "box": [218, 737, 414, 26], "lang": "eng", "psm": 7, "kind": "text" },
+    "address_local":     { "box": [836, 735, 374, 30], "lang": "mar+hin", "psm": 7, "kind": "text" },
+    "farmer_type":       { "box": [172, 782, 352, 26], "lang": "eng", "psm": 7, "kind": "text" },
+    "occupation":        { "box": [628, 782, 582, 26], "lang": "eng", "psm": 7, "kind": "text" }
+  },
+  "photoBox": [1135, 140, 78, 98],
+  "page2": {
+    "tableX": [75, 174, 255, 340, 414, 468, 526, 614, 728, 810, 904, 1050, 1211],
+    "columns": [
+      { "key": "state",           "lang": "eng",     "kind": "state" },
+      { "key": "district",        "lang": "eng",     "kind": "district" },
+      { "key": "sub_district",    "lang": "eng",     "kind": "wrapped" },
+      { "key": "village",         "lang": "eng",     "kind": "wrapped" },
+      { "key": "survey_no",       "lang": "eng",     "kind": "survey", "whitelist": "0123456789/-AaBbCc" },
+      { "key": "sub_survey_no",   "lang": "eng",     "kind": "star" },
+      { "key": "owner_name",      "lang": "mar+hin", "kind": "text" },
+      { "key": "identifier_name", "lang": "mar+hin", "kind": "text" },
+      { "key": "owner_type",      "lang": "eng",     "kind": "text" },
+      { "key": "share_type",      "lang": "eng",     "kind": "text" },
+      { "key": "area_total_ha",   "lang": "eng",     "kind": "area", "whitelist": "0123456789.,*" },
+      { "key": "area_assigned_ha","lang": "eng",     "kind": "area", "whitelist": "0123456789.,*" }
+    ]
+  }
+}

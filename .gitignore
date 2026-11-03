@@ -1,0 +1,15 @@
+# Real/sensitive sample data supplied for reference - never commit
+*.pdf
+Media*.jpg
+samples/
+.env
+.env.*
+node_modules/
+.devdata/
+tessdata/*.traineddata
+.next/
+dist/
+!.env.example
+
+# build caches
+*.tsbuildinfo

@@ -1,0 +1,13 @@
+{
+  "name": "agri-card",
+  "private": true,
+  "scripts": {
+    "db:generate": "prisma generate --schema db/schema.prisma",
+    "db:push": "prisma db push --schema db/schema.prisma",
+    "bench": "pnpm --filter @agri/extract bench"
+  },
+  "devDependencies": {
+    "@prisma/client": "6.19.3",
+    "prisma": "6.19.3"
+  }
+}
