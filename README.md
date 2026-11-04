@@ -1,4 +1,4 @@
-# Agri·Card — platform-generated farmer identity cards
+# KisanPatra — platform-generated farmer identity cards
 
 Upload a farmer registration PDF → local OCR extraction → human review → verifier approval → bilingual card with QR → public verification page.
 Cards are **platform-generated, not government credentials**. See `docs/` for the PRD, functional scope, card spec, security architecture and technical architecture.
@@ -17,8 +17,8 @@ docs/             planning documents
 ## Dev setup (Windows, zero cost, all local)
 Prereqs: Node 22+, pnpm, Tesseract 5 (`C:\Program Files\Tesseract-OCR`), Chrome, PostgreSQL binaries.
 1. `pnpm install` then `pnpm approve-builds --all` (once).
-2. Copy `.env.example` → `.env` (dev values only). DB is a private Postgres on **port 5433** (`.devdata/pg`), separate from any system Postgres.
-   Start it: `pg_ctl -D .devdata/pg -o "-p 5433" -l .devdata/pg.log start`
+2. Copy `.env.example` → `.env` (dev values only). DB is a private Postgres (`.devdata/pg`), separate from any system Postgres. Use a free port: 5433 by default; on this machine WSL (`wslrelay.exe`) can occupy 5433, in which case use **5434** and set it in `DATABASE_URL`.
+   Start it (match the port in `DATABASE_URL`): `pg_ctl -D .devdata/pg -o "-p 5434" -l .devdata/pg.log start`
 3. Schema: `pnpm exec prisma generate --schema db/schema.prisma` and `pnpm exec prisma db push --schema db/schema.prisma`
 4. Seed dev users: `cd apps/api && SEED_PASSWORD=<pick one> pnpm seed` (admin/operator/verifier/auditor `@dev.local`)
 5. Run: `cd apps/api && pnpm start` and `cd apps/web && pnpm dev` → http://localhost:3000
@@ -32,6 +32,7 @@ Prereqs: Node 22+, pnpm, Tesseract 5 (`C:\Program Files\Tesseract-OCR`), Chrome,
 - Two-step sign-in = TOTP authenticator app (RFC 6238, no dependency, replay-protected) + 8 one-time recovery codes (stored hashed). `MFA_REQUIRED_ROLES=ADMIN,VERIFIER` makes it mandatory in production (empty in dev). Lost phone: recovery code, or an admin resets the user's 2-step.
 - Admins cannot change their own role/status or reset their own login through the admin API, and cannot touch SUPER_ADMIN. Suspending a user or changing a role revokes their sessions immediately. Audit entries hold ids and roles only.
 - Env: `MFA_REQUIRED_ROLES`, `LOGIN_RATE_MAX` (10 per 15 min per IP+account), `REVIEW_CONFIDENCE` (0.90).
+- Security audit: `node tools/security-test.mjs` (own API + 2 workers, synthetic forms, port 4000 free) checks record isolation between operators, four-eyes, upload limits, CSRF on every mutating route, headers/cookies/error hygiene, injection and mass-assignment, public-verify leakage and enumeration, no plaintext personal data in the database dump, audit log hygiene, encrypted files, and that two workers never process a document twice.
 - Tests: `tools/admin-test.mjs` (API, starts its own server), `tools/admin-ui-smoke.mjs` (browser), `apps/api/src/totp.test.ts` (RFC vectors).
 
 ## Printing
@@ -52,6 +53,8 @@ Uploads only create a `QUEUED` ExtractionJob row. A worker claims jobs from Post
 ## Extraction benchmark
 `node tools/bench/generate.mjs 36 7` builds synthetic forms (fabricated people, real form layout, scan degradations: clean/jpeg/skew/lowres/noisy) with ground truth in `samples/synthetic/`.
 `cd packages/extract && npx tsx src/benchmark.ts <abs-path>/samples/synthetic --out <abs-path>/.devdata/bench` writes `report.md` / `report.json`: exact-match and CER per field and variant, review-flag rate, confidence calibration, and **silent errors** (wrong but not flagged for review; target 0).
+Last result (36 forms, 1,464 fields): **96.7% exact**, mean CER 0.021, **0 silent errors**, 30% of fields flagged for review. Weakest fields: `address_local` (Devanagari spelling slips, always flagged), `caste_category` / `farmer_type` / `land.sub_survey_no` on the noisy and low-resolution variants (cell read as empty, flagged).
+Mechanical corrections (all flagged for the reviewer, raw OCR text always kept, so nothing is corrected silently): near-miss caste category / farmer type snapped to the closed list (`SNAPPED_TO_LIST`, never for ambiguous or 2-letter values); junk in the sub-survey cell dropped (`SUB_SURVEY_UNREADABLE`); enrollment number regrouped to 2/3/4/6/6 digits when exactly 21 digits were read (`AUTO_REGROUPED`); a Marathi/Hindi name word split or off by one letter is repaired from the same name printed elsewhere on the form, with 2+ witnesses needed for a letter change (`NAME_RECONCILED`, `packages/extract/src/names.ts`). Unit tests: `pnpm --filter @agri/extract test`.
 Limits: synthetic forms test content and scan quality, not layout drift between real form versions; add real redacted forms as they become available.
 
 ## Languages
